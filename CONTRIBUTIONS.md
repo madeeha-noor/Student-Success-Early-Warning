@@ -1,16 +1,5 @@
 # Contributions
 
-Update this after every working session. Every member must own at least one mining technique.
-
-| Date | Member | What was done | Files / commits |
+| Date | Member | What was done | Files |
 |---|---|---|---|
-| | Areeba Zahra | | |
-| | Madeeha Noor | | |
-| | Qudsia Batool | | |
-
-## Technique ownership
-| Technique | Owner |
-|---|---|
-| Classification (DT / NB / RF / SVM) | TBD |
-| Clustering | TBD |
-| Association rules | TBD |
+| 11 Oct | Madeeha Noor | Created repository, project structure and README | README.md, CONTRIBUTIONS.md, notebooks/01_data_loading.ipynb |
