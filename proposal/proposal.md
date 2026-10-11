@@ -1,25 +1,22 @@
-# M0 Proposal: Student Success Early-Warning (Group G03)
+# Project Proposal: Student Success Early-Warning
 
-**Members:** Areeba Zahra (Lead), Madeeha Noor, Qudsia Batool
+**Group G03:** Areeba Zahra (Team Lead), Madeeha Noor, Qudsia Batool
 
-## Problem statement
-(2-3 sentences: why dropout matters, who would use the system)
+## Problem
+
 
 ## Dataset
-UCI Predict Students' Dropout and Academic Success (id 697), 4,424 rows, 36 features, 3 classes. Citation and license.
+UCI "Predict Students' Dropout and Academic Success" (id 697): 4,424 students, 36 features, three outcomes (Dropout, Enrolled, Graduate). CC BY 4.0.
 
-## Three questions we will answer
-1.
-2.
-3.
+Realinho, V., Machado, J., Baptista, L., Martins, M. V. (2022). Predicting Student Dropout and Academic Success. *Data*, 7(11), 146. https://doi.org/10.3390/data7110146
 
-## Planned methods
-(Classification, clustering, association rules; baselines; metrics such as macro-F1; leakage check)
+## Questions
 
-## Role split
-| Member | Role | Technique owned |
-|---|---|---|
-| | | |
+
+## Methods
+
+
+## Team roles
+
 
 ## Risks and ethics
-(Class imbalance, sensitive attributes, fair use of risk labels)
