@@ -1,6 +1,6 @@
 # Project Proposal: Student Success Early-Warning
 
-**Group G03:** Areeba Zahra (Team Lead), Madeeha Noor, Qudsia Batool
+**Group G03:** Areeba Zahra , Madeeha Noor, Qudsia Batool
 
 ## Problem
 
