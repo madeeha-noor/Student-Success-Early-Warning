@@ -7,6 +7,7 @@ Pages
 4. Dropout rules      association rules IF ... THEN Dropout (Madeeha's notebook 04)
 5. Model results      comparison table from notebook 06
 """
+import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -153,9 +154,13 @@ def mine_rules(min_sup, min_conf):
     drop = rules["consequents"].apply(lambda s: s == frozenset({"Target=Dropout"}))
     no_t = rules["antecedents"].apply(lambda s: not any(i.startswith("Target=") for i in s))
     r = rules[drop & no_t & (rules["lift"] >= 1.2)].copy()
-    r["IF (antecedent)"] = r["antecedents"].apply(lambda s: "  AND  ".join(sorted(s)))
-    r = r.sort_values(["lift", "confidence"], ascending=False)
-    return r[["IF (antecedent)", "support", "confidence", "lift"]].round(3).reset_index(drop=True), len(freq)
+    r["IF (antecedent)"] = r["antecedents"].apply(lambda s: " and ".join(sorted(s)))
+    r["n"] = r["antecedents"].apply(len)
+    r[["support", "confidence", "lift"]] = r[["support", "confidence", "lift"]].round(3)
+    # rules with identical numbers describe the same students: keep the shortest wording
+    r = r.sort_values(["lift", "confidence", "n"], ascending=[False, False, True])
+    r = r.drop_duplicates(subset=["support", "confidence", "lift"])
+    return r[["IF (antecedent)", "support", "confidence", "lift"]].reset_index(drop=True), len(freq)
 
 
 def reasons(row):
@@ -168,58 +173,145 @@ def reasons(row):
     return ", ".join(r) if r else "-"
 
 
+# ================================================================ look and feel
+NAVY, BLUE, TEAL, RED, GREY, LIGHT = "#0B2545", "#1B6CA8", "#1B7A99", "#C0392B", "#8A94A6", "#DCE3EE"
+
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+html, body, [class*="css"], .stMarkdown, .stDataFrame { font-family: 'Inter', 'Segoe UI', Arial, sans-serif; }
+.block-container { padding-top: 1.4rem; padding-bottom: 3rem; max-width: 1240px; }
+[data-testid="stToolbar"], footer, #MainMenu { display: none !important; }
+[data-testid="stSidebar"] { border-right: 1px solid #E5E9F0; }
+.hero { background: linear-gradient(115deg, #0B2545 0%, #13315C 55%, #1B6CA8 100%); color: #fff;
+        padding: 26px 32px; border-radius: 14px; margin-bottom: 22px; }
+.hero .eyebrow { font-size: 11px; letter-spacing: .16em; text-transform: uppercase; opacity: .75; font-weight: 600; }
+.hero h1 { color: #fff; font-size: 30px; font-weight: 700; margin: 6px 0 4px 0; padding: 0; line-height: 1.2; }
+.hero .sub { font-size: 14px; opacity: .85; }
+.ptitle { font-size: 22px; font-weight: 700; color: #0B2545; margin: 4px 0 2px 0; }
+.psub { font-size: 14px; color: #5B6577; margin-bottom: 16px; }
+.kpi { background: #fff; border: 1px solid #E5E9F0; border-left: 5px solid #1B6CA8; border-radius: 12px;
+       padding: 15px 18px; box-shadow: 0 1px 3px rgba(16,24,40,.06); height: 100%; }
+.kpi .l { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #6B7280; font-weight: 600; }
+.kpi .v { font-size: 30px; font-weight: 700; color: #0B2545; line-height: 1.25; }
+.kpi .s { font-size: 12px; color: #6B7280; }
+.card { background: #fff; border: 1px solid #E5E9F0; border-radius: 12px; padding: 16px 18px;
+        box-shadow: 0 1px 3px rgba(16,24,40,.06); height: 100%; }
+.card .n { font-size: 12px; font-weight: 600; color: #0B2545; min-height: 34px; }
+.card .p { font-size: 32px; font-weight: 700; line-height: 1.2; }
+.card .d { font-size: 12px; color: #6B7280; margin-top: 4px; }
+.band { display: inline-block; padding: 3px 12px; border-radius: 999px; font-size: 12px; font-weight: 600; color: #fff; }
+.note { font-size: 12.5px; color: #6B7280; margin-top: 10px; }
+h2, h3 { color: #0B2545; }
+</style>
+""", unsafe_allow_html=True)
+
+
+def kpi(label, value, sub="", accent=BLUE):
+    return (f'<div class="kpi" style="border-left-color:{accent}"><div class="l">{label}</div>'
+            f'<div class="v">{value}</div><div class="s">{sub}</div></div>')
+
+
+def kpi_row(items):
+    for col, it in zip(st.columns(len(items)), items):
+        col.markdown(kpi(*it), unsafe_allow_html=True)
+    st.write("")
+
+
+def page_header(title, sub):
+    st.markdown(f'<div class="ptitle">{title}</div><div class="psub">{sub}</div>', unsafe_allow_html=True)
+
+
+def band(risk):
+    if risk >= 90: return "Critical", "#7B1E1E"
+    if risk >= 75: return "High", RED
+    if risk >= 60: return "Elevated", "#D9822B"
+    if risk >= 40: return "Moderate", "#C9A227"
+    return "Low", "#2E8B57"
+
+
+def style_chart(ch, height=300):
+    return (ch.properties(height=height)
+              .configure_axis(labelColor="#4B5563", titleColor="#4B5563", gridColor="#EEF1F6", domainColor="#CBD2DC")
+              .configure_view(strokeWidth=0)
+              .configure_legend(labelColor="#4B5563", titleColor="#4B5563"))
+
+
+st.markdown("""
+<div class="hero">
+  <div class="eyebrow">DS-311 Data Mining &nbsp;\u00b7&nbsp; Group 03 &nbsp;\u00b7&nbsp; Project P10</div>
+  <h1>Student Success Early-Warning</h1>
+  <div class="sub">Advisor decision-support platform: identify students at risk of dropping out early enough to help.</div>
+</div>
+""", unsafe_allow_html=True)
+
 # ================================================================ pages
 def page_risk_list():
-    st.header("At-risk students")
-    st.caption("Students ranked by predicted dropout risk, using admission data and first-semester results.")
+    page_header("At-risk students", "Students ranked by predicted dropout risk from admission data and first-semester results.")
     df = scored_students()
+    total_drop = int((df["actual"] == "Dropout").sum())
 
-    c1, c2 = st.columns([2, 1])
-    threshold = c1.slider("Flag students with risk above (%)", 10, 90, 60, step=5)
+    c1, c2 = st.columns([3, 1])
+    threshold = c1.slider("Flag students with predicted risk of at least (%)", 10, 90, 60, step=5)
     top_n = c2.number_input("Rows to show", 10, 500, 50, step=10)
     flagged = df[df["risk"] >= threshold]
+    hit = int((flagged["actual"] == "Dropout").sum())
 
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Students", f"{len(df):,}")
-    m2.metric("Flagged", f"{len(flagged):,}")
-    if len(flagged):
-        m3.metric("Flagged who actually dropped out", f"{(flagged['actual'] == 'Dropout').mean() * 100:.0f}%",
-                  help="Checked against the known outcomes in this dataset. A real advisor would not have this column.")
+    kpi_row([
+        ("Students screened", f"{len(df):,}", "First-year cohort", NAVY),
+        ("Flagged", f"{len(flagged):,}", f"{len(flagged) / len(df) * 100:.0f}% of students", RED),
+        ("Flagged who dropped out", f"{hit / len(flagged) * 100:.0f}%" if len(flagged) else "-", "Precision, checked against known outcomes", TEAL),
+        ("Dropouts captured", f"{hit / total_drop * 100:.0f}%", f"{hit:,} of {total_drop:,} dropouts", BLUE)])
 
-    view = flagged.sort_values("risk", ascending=False).head(int(top_n)).copy()
-    view["Reasons (simple flags)"] = view.apply(reasons, axis=1)
-    yes_no = lambda s: s.map({1: "Yes", 0: "No"})
-    show = pd.DataFrame({
-        "Dropout risk (%)": view["risk"],
-        "Reasons (simple flags)": view["Reasons (simple flags)"],
-        "Debtor": yes_no(view["Debtor"]),
-        "Fees up to date": yes_no(view["Tuition fees up to date"]),
-        "Scholarship": yes_no(view["Scholarship holder"]),
-        "Age": view["Age at enrollment"],
-        "Units approved (1st sem)": view["Curricular units 1st sem (approved)"],
-        "Grade (1st sem)": view["Curricular units 1st sem (grade)"].round(1)})
-    st.dataframe(show, width="stretch", column_config={"Dropout risk (%)": st.column_config.ProgressColumn(
-        "Dropout risk (%)", min_value=0, max_value=100, format="%.0f")})
-    st.caption("Model: Random Forest on admission and first-semester features, scored out-of-fold. "
-               "Reasons are simple rule-based flags; model-based explanations are a later step.")
+    left, right = st.columns([3, 2])
+    with left:
+        view = flagged.sort_values("risk", ascending=False).head(int(top_n)).copy()
+        yes_no = lambda s: s.map({1: "Yes", 0: "No"})
+        show = pd.DataFrame({
+            "Risk band": view["risk"].apply(lambda r: band(r)[0]),
+            "Dropout risk (%)": view["risk"],
+            "Reasons (simple flags)": view.apply(reasons, axis=1),
+            "Debtor": yes_no(view["Debtor"]),
+            "Fees up to date": yes_no(view["Tuition fees up to date"]),
+            "Scholarship": yes_no(view["Scholarship holder"]),
+            "Age": view["Age at enrollment"],
+            "Units approved": view["Curricular units 1st sem (approved)"],
+            "Grade": view["Curricular units 1st sem (grade)"].round(1)})
+        st.dataframe(show, width="stretch", height=430, column_config={
+            "Dropout risk (%)": st.column_config.ProgressColumn("Dropout risk (%)", min_value=0, max_value=100, format="%.0f")})
+    with right:
+        hist = df[["risk"]].copy()
+        hist["Status"] = np.where(hist["risk"] >= threshold, "Flagged", "Not flagged")
+        bars = alt.Chart(hist).mark_bar().encode(
+            x=alt.X("risk:Q", bin=alt.Bin(step=5), title="Predicted dropout risk (%)"),
+            y=alt.Y("count()", title="Students"),
+            color=alt.Color("Status:N", scale=alt.Scale(domain=["Not flagged", "Flagged"], range=[LIGHT, RED]),
+                            legend=alt.Legend(orient="top", title=None)))
+        st.altair_chart(style_chart(bars, 380), width="stretch")
+    st.markdown('<div class="note">Model: Random Forest on admission and first-semester features, scored out-of-fold '
+                '(each student is scored by a model that never saw that student). Reasons are simple rule-based flags. '
+                'Decision support for advisors, never an automatic decision.</div>', unsafe_allow_html=True)
 
 
 def page_what_if():
-    st.header("What-if for one student")
-    st.caption("Start from a typical student and change a few things to see how the predicted risk moves.")
+    page_header("What-if analysis", "Start from a typical student, change a few details and see how the predicted risk moves.")
     df = load_df()
     model = final_model()
     base = pd.concat([df[CODE_COLS + BINARY_COLS].mode().iloc[0], df[ADMISSION_NUM + SEM1_NUM].median()])
 
-    a, b = st.columns(2)
-    approved = a.slider("Units approved in 1st semester", 0, int(df["Curricular units 1st sem (approved)"].max()),
-                        int(base["Curricular units 1st sem (approved)"]))
-    grade = a.slider("Average grade in 1st semester", 0.0, 20.0,
-                     float(round(base["Curricular units 1st sem (grade)"], 1)), step=0.5)
-    age = a.slider("Age at enrollment", 17, 70, int(base["Age at enrollment"]))
-    tuition = b.toggle("Tuition fees up to date", value=bool(base["Tuition fees up to date"]))
-    debtor = b.toggle("Debtor", value=bool(base["Debtor"]))
-    scholar = b.toggle("Scholarship holder", value=bool(base["Scholarship holder"]))
+    left, right = st.columns([1, 1], gap="large")
+    with left:
+        with st.container(border=True):
+            st.markdown("**Student details**")
+            approved = st.slider("Units approved in 1st semester", 0, int(df["Curricular units 1st sem (approved)"].max()),
+                                 int(base["Curricular units 1st sem (approved)"]))
+            grade = st.slider("Average grade in 1st semester", 0.0, 20.0,
+                              float(round(base["Curricular units 1st sem (grade)"], 1)), step=0.5)
+            age = st.slider("Age at enrollment", 17, 70, int(base["Age at enrollment"]))
+            t1, t2, t3 = st.columns(3)
+            tuition = t1.toggle("Fees up to date", value=bool(base["Tuition fees up to date"]))
+            debtor = t2.toggle("Debtor", value=bool(base["Debtor"]))
+            scholar = t3.toggle("Scholarship", value=bool(base["Scholarship holder"]))
 
     row = base.copy()
     row["Curricular units 1st sem (approved)"] = approved
@@ -228,69 +320,149 @@ def page_what_if():
     row["Tuition fees up to date"] = int(tuition)
     row["Debtor"] = int(debtor)
     row["Scholarship holder"] = int(scholar)
-
     p = dict(zip(model.classes_, model.predict_proba(pd.DataFrame([row[FEATURES_B]]))[0]))
-    st.subheader(f"Predicted dropout risk: {p['Dropout'] * 100:.0f}%")
-    st.progress(float(p["Dropout"]))
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Dropout", f"{p['Dropout'] * 100:.0f}%")
-    c2.metric("Enrolled", f"{p['Enrolled'] * 100:.0f}%")
-    c3.metric("Graduate", f"{p['Graduate'] * 100:.0f}%")
-    st.caption("All other details are held at the typical student (most common category or median).")
+    risk = p["Dropout"] * 100
+    label, colour = band(risk)
+
+    with right:
+        with st.container(border=True):
+            st.markdown("**Predicted outcome**")
+            st.markdown(f'<div style="font-size:54px;font-weight:700;color:{colour};line-height:1.1">{risk:.0f}%</div>'
+                        f'<span class="band" style="background:{colour}">{label} dropout risk</span>', unsafe_allow_html=True)
+            data = pd.DataFrame({"Outcome": ["Dropout", "Enrolled", "Graduate"],
+                                 "Probability (%)": [p["Dropout"] * 100, p["Enrolled"] * 100, p["Graduate"] * 100]})
+            ch = alt.Chart(data).mark_bar(cornerRadiusEnd=4, size=26).encode(
+                x=alt.X("Probability (%):Q", scale=alt.Scale(domain=[0, 100])),
+                y=alt.Y("Outcome:N", sort=["Dropout", "Enrolled", "Graduate"], title=None),
+                color=alt.Color("Outcome:N", legend=None,
+                                scale=alt.Scale(domain=["Dropout", "Enrolled", "Graduate"], range=[RED, GREY, TEAL])))
+            st.altair_chart(style_chart(ch, 150), width="stretch")
+    st.markdown('<div class="note">All other details are held at the typical student (most common category or median).</div>',
+                unsafe_allow_html=True)
 
 
 def page_profiles():
-    st.header("Cohort profiles")
-    st.caption("Students grouped by similarity with K-means (k = 5). The outcome was not used to build the groups, "
-               "only to describe them afterwards.")
+    page_header("Cohort profiles", "Students grouped by similarity (K-means, k = 5). The outcome was not used to build the groups, "
+                                   "only to describe them afterwards.")
     stats, n_comp = cluster_profiles()
+    overall = (load_df()["Target"] == "Dropout").mean() * 100
     top = stats.iloc[0]
-    st.metric(f"Highest-risk profile: {top['Profile']}", f"{top['Dropout %']:.0f}% dropout",
-              help=f"{int(top['Students'])} students")
+    share_all = top["Students"] * top["Dropout %"] / 100 / (load_df()["Target"] == "Dropout").sum() * 100
+    kpi_row([
+        ("Highest-risk profile", f"{top['Dropout %']:.0f}%", f"dropout: {top['Profile']}", RED),
+        ("Size of that profile", f"{int(top['Students']):,}", f"{top['Students'] / stats['Students'].sum() * 100:.0f}% of students", NAVY),
+        ("Share of all dropouts", f"{share_all:.0f}%", "in this one profile", BLUE),
+        ("Overall dropout rate", f"{overall:.0f}%", "all students", TEAL)])
+
+    cols = st.columns(len(stats))
+    for col, (_, r) in zip(cols, stats.iterrows()):
+        small = r["Students"] < 0.03 * stats["Students"].sum()
+        colour = GREY if small else (RED if r["Dropout %"] >= 50 else NAVY)
+        col.markdown(f'<div class="card" style="opacity:{0.6 if small else 1}"><div class="n">{r["Profile"]}</div>'
+                     f'<div class="p" style="color:{colour}">{r["Dropout %"]:.0f}%</div>'
+                     f'<div class="d">dropout rate<br>{int(r["Students"]):,} students<br>average age {r["Average age"]:.0f}, '
+                     f'{r["Approved units (1st sem)"]:.1f} units approved</div></div>', unsafe_allow_html=True)
+    st.write("")
+
+    chart_df = stats.copy()
+    chart_df["Highlight"] = np.where(chart_df["Dropout %"] == chart_df["Dropout %"].max(), "Highest risk", "Other")
+    bars = alt.Chart(chart_df).mark_bar(cornerRadiusEnd=4, size=24).encode(
+        x=alt.X("Dropout %:Q", scale=alt.Scale(domain=[0, 100]), title="Dropout rate (%)"),
+        y=alt.Y("Profile:N", sort="-x", title=None, axis=alt.Axis(labelLimit=320)),
+        color=alt.Color("Highlight:N", legend=None, scale=alt.Scale(domain=["Highest risk", "Other"], range=[RED, BLUE])))
+    rule = alt.Chart(pd.DataFrame({"x": [overall]})).mark_rule(color="#111827", strokeDash=[5, 4]).encode(x="x:Q")
+    st.altair_chart(style_chart(bars + rule, 260), width="stretch")
+    st.caption("Dashed line: overall dropout rate.")
+
     st.dataframe(stats.round(1), width="stretch", hide_index=True)
-    st.bar_chart(stats.set_index("Profile")["Dropout %"])
-    st.caption(f"Features: 18 columns, standardised, reduced with PCA to {n_comp} components. The silhouette score is low "
-               "(about 0.16), so the groups overlap: these are descriptive profiles, not sharply separated groups. "
-               "Profile names are derived from each group's averages.")
+    st.markdown(f'<div class="note">Features: 18 columns, standardised, reduced with PCA to {n_comp} components. The silhouette '
+                'score is low (about 0.16), so the groups overlap: these are descriptive profiles, not sharply separated groups. '
+                'Profile names are derived from each group\'s averages. Associations, not causes.</div>', unsafe_allow_html=True)
 
 
 def page_rules():
-    st.header("Dropout rules")
-    st.caption("Association rules of the form IF A and B THEN Dropout (Apriori).")
+    page_header("Dropout rules", "Association rules of the form IF A and B THEN Dropout, mined with Apriori.")
     c1, c2 = st.columns(2)
     min_sup = c1.slider("Minimum support", 0.03, 0.15, 0.05, step=0.01)
     min_conf = c2.slider("Minimum confidence", 0.40, 0.80, 0.50, step=0.05)
     rules, n_items = mine_rules(min_sup, min_conf)
-    st.write(f"{len(rules)} Dropout rules with lift of at least 1.2 (from {n_items} frequent itemsets).")
-    if len(rules):
-        st.dataframe(rules.head(20), width="stretch", hide_index=True)
-    else:
+    if not len(rules):
         st.info("No rules at these settings. Lower the confidence or support.")
-    st.caption("Support: share of all students with the rule's conditions and Dropout. Confidence: share of students "
-               "with the conditions who dropped out. Lift: confidence divided by the overall Dropout rate (about 32%). "
-               "Rules show association, not cause.")
+        return
+    kpi_row([
+        ("Distinct rules", f"{len(rules):,}", f"from {n_items:,} frequent itemsets", NAVY),
+        ("Strongest lift", f"{rules['lift'].max():.2f}", "times the base dropout rate", RED),
+        ("Highest confidence", f"{rules['confidence'].max() * 100:.0f}%", "of matching students dropped out", TEAL),
+        ("Rules shown", f"{min(len(rules), 15)}", "top rules by lift", BLUE)])
+
+    left, right = st.columns([3, 2])
+    with left:
+        show = pd.DataFrame({
+            "Rule: if the student has ... then Dropout": rules["IF (antecedent)"],
+            "Support (%)": rules["support"] * 100,
+            "Confidence (%)": rules["confidence"] * 100,
+            "Lift": rules["lift"]}).head(15)
+        st.dataframe(show, width="stretch", hide_index=True, height=520, column_config={
+            "Support (%)": st.column_config.NumberColumn(format="%.1f"),
+            "Confidence (%)": st.column_config.NumberColumn(format="%.1f"),
+            "Lift": st.column_config.NumberColumn(format="%.2f")})
+    with right:
+        sc = alt.Chart(rules.assign(**{"Support (%)": rules["support"] * 100, "Confidence (%)": rules["confidence"] * 100})).mark_circle(
+            size=70, opacity=0.75).encode(
+            x=alt.X("Support (%):Q", title="Support (%)"), y=alt.Y("Confidence (%):Q", scale=alt.Scale(zero=False)),
+            color=alt.Color("lift:Q", title="Lift", scale=alt.Scale(scheme="blues")),
+            tooltip=["IF (antecedent)", "support", "confidence", "lift"])
+        st.altair_chart(style_chart(sc, 400), width="stretch")
+        st.caption("Each dot is a rule. Further up and to the right is stronger and more common.")
+    st.markdown('<div class="note"><b>Support:</b> share of all students who have the conditions and dropped out. '
+                '<b>Confidence:</b> among students with the conditions, the share who dropped out. '
+                '<b>Lift:</b> confidence divided by the overall dropout rate (about 32%); above 1 means more than chance. '
+                'Rules with identical numbers are merged. Rules show association, not cause.</div>', unsafe_allow_html=True)
 
 
 def page_results():
-    st.header("Model results")
-    st.caption("From notebook 06: stratified 5-fold cross-validation on the training set (macro-F1).")
+    page_header("Model results", "Classification models compared on admission data alone and with first-semester results "
+                                 "(stratified 5-fold cross-validation, macro-F1).")
+    kpi_row([
+        ("Best model", "SVM", "admission + 1st semester", NAVY),
+        ("Test macro-F1", "0.68", "accuracy 0.72", BLUE),
+        ("Baseline macro-F1", "0.22", "always predict Graduate", GREY),
+        ("Dropout precision / recall", "0.83 / 0.63", "SVM on the test set", RED)])
+
     res = pd.DataFrame({
         "Model": ["Decision Tree", "Naive Bayes", "Random Forest", "SVM"],
         "Admission only": [0.488, 0.212, 0.507, 0.574],
         "Admission + 1st semester": [0.575, 0.215, 0.623, 0.674]})
+    long = res.melt("Model", var_name="Feature set", value_name="Macro-F1")
+    bars = alt.Chart(long).mark_bar(cornerRadiusEnd=3).encode(
+        x=alt.X("Model:N", title=None, sort=list(res["Model"]), axis=alt.Axis(labelAngle=0)),
+        xOffset="Feature set:N",
+        y=alt.Y("Macro-F1:Q", scale=alt.Scale(domain=[0, 0.8])),
+        color=alt.Color("Feature set:N", legend=alt.Legend(orient="top", title=None),
+                        scale=alt.Scale(domain=["Admission only", "Admission + 1st semester"], range=[LIGHT, NAVY])))
+    labels = alt.Chart(long).mark_text(dy=-6, fontSize=11, color="#374151").encode(
+        x=alt.X("Model:N", sort=list(res["Model"])), xOffset="Feature set:N",
+        y="Macro-F1:Q", text=alt.Text("Macro-F1:Q", format=".2f"))
+    base = alt.Chart(pd.DataFrame({"y": [0.222]})).mark_rule(color=RED, strokeDash=[5, 4]).encode(y="y:Q")
+    st.altair_chart(style_chart(bars + labels + base, 340), width="stretch")
+    st.caption("Dashed red line: majority-class baseline (0.222).")
+
     st.dataframe(res, width="stretch", hide_index=True)
-    st.bar_chart(res.set_index("Model"))
-    st.write("Majority-class baseline macro-F1 on the test set: 0.222.")
-    st.write("Best model (SVM, admission + 1st semester) on the test set: accuracy 0.72, macro-F1 0.68. "
-             "Dropout precision 0.83, recall 0.63.")
-    st.caption("First-semester results lift every useful model by about 0.06 to 0.10 macro-F1. "
-               "The Enrolled class is the hardest to separate.")
+    st.markdown('<div class="note">First-semester results lift every useful model by about 0.06 to 0.10 macro-F1. '
+                'Naive Bayes stays near the baseline. The Enrolled class is the hardest to separate. '
+                'The dashboard uses a Random Forest because it gives probabilities directly and has the higher Dropout recall.</div>',
+                unsafe_allow_html=True)
 
 
 # ================================================================ layout
-st.title("🎓 Student Success Early-Warning")
-st.sidebar.title("Menu")
-PAGES = {"At-risk students": page_risk_list, "What-if": page_what_if, "Cohort profiles": page_profiles,
+st.sidebar.markdown('<div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#6B7280;font-weight:600">'
+                    'Navigation</div>', unsafe_allow_html=True)
+PAGES = {"At-risk students": page_risk_list, "What-if analysis": page_what_if, "Cohort profiles": page_profiles,
          "Dropout rules": page_rules, "Model results": page_results}
-PAGES[st.sidebar.radio("Page", list(PAGES))]()
-st.sidebar.caption("DS-311 Data Mining, Group 03. Decision support for advisors, never an automatic decision.")
+choice = st.sidebar.radio("Page", list(PAGES), label_visibility="collapsed")
+st.sidebar.divider()
+st.sidebar.markdown('<div style="font-size:12px;color:#6B7280;line-height:1.6"><b style="color:#0B2545">Group 03</b><br>'
+                    'Areeba Zahra \u00b7 Qudsia Batool \u00b7 Madeeha Noor<br><br>'
+                    'Data: UCI Predict Students\' Dropout and Academic Success (CC BY 4.0).<br><br>'
+                    'Decision support for advisors, never an automatic decision.</div>', unsafe_allow_html=True)
+PAGES[choice]()
