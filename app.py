@@ -19,7 +19,7 @@ from sklearn.model_selection import StratifiedKFold, cross_val_predict
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, RobustScaler, StandardScaler
 
-st.set_page_config(page_title="Student Success Early-Warning", page_icon="🎓", layout="wide")
+st.set_page_config(page_title="Student Success Early-Warning", page_icon="🎓", layout="wide", initial_sidebar_state="expanded")
 SEED = 42
 
 # ---- feature sets (same lists as notebook 06, Feature Set B = admission + first semester)
@@ -181,7 +181,7 @@ st.markdown("""
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 html, body, [class*="css"], .stMarkdown, .stDataFrame { font-family: 'Inter', 'Segoe UI', Arial, sans-serif; }
 .block-container { padding-top: 1.4rem; padding-bottom: 3rem; max-width: 1240px; }
-[data-testid="stToolbar"], footer, #MainMenu { display: none !important; }
+[data-testid="stToolbarActions"], [data-testid="stMainMenu"], [data-testid="stAppDeployButton"], footer, #MainMenu { display: none !important; }
 [data-testid="stSidebar"] { border-right: 1px solid #E5E9F0; }
 .hero { background: linear-gradient(115deg, #0B2545 0%, #13315C 55%, #1B6CA8 100%); color: #fff;
         padding: 26px 32px; border-radius: 14px; margin-bottom: 22px; }
@@ -245,6 +245,35 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+
+def gauge(risk, colour, label, note=""):
+    """Pure CSS donut gauge (no chart library, so it always renders the same)."""
+    return (f'<div style="display:flex;align-items:center;gap:18px;margin:6px 0 10px 0">'
+            f'<div style="width:132px;height:132px;border-radius:50%;flex:none;'
+            f'background:conic-gradient({colour} {risk * 3.6:.1f}deg,#E6EBF2 0);display:flex;align-items:center;justify-content:center">'
+            f'<div style="width:100px;height:100px;border-radius:50%;background:#fff;display:flex;align-items:center;'
+            f'justify-content:center;font-size:30px;font-weight:700;color:{colour}">{risk:.0f}%</div></div>'
+            f'<div><span class="band" style="background:{colour}">{label}</span>'
+            f'<div class="d" style="margin-top:8px">{note}</div></div></div>')
+
+
+def support_actions(r):
+    acts = []
+    if r["Tuition fees up to date"] == 0 or r["Debtor"] == 1:
+        acts.append("Financial counselling and a fee-payment plan")
+    if r["Curricular units 1st sem (approved)"] == 0 or 0 < r["Curricular units 1st sem (grade)"] < 10:
+        acts.append("Academic tutoring and a course-load review")
+    if r["Age at enrollment"] >= 25:
+        acts.append("Check work and family commitments; offer flexible options")
+    acts.append("Advisor check-in within two weeks")
+    return acts
+
+
+def bullet_list(items):
+    return "<ul style='margin:6px 0 0 0;padding-left:18px;font-size:13.5px;color:#374151;line-height:1.7'>" + \
+           "".join(f"<li>{i}</li>" for i in items) + "</ul>"
+
+
 # ================================================================ pages
 def page_risk_list():
     page_header("At-risk students", "Students ranked by predicted dropout risk from admission data and first-semester results.")
@@ -265,21 +294,6 @@ def page_risk_list():
 
     left, right = st.columns([3, 2])
     with left:
-        view = flagged.sort_values("risk", ascending=False).head(int(top_n)).copy()
-        yes_no = lambda s: s.map({1: "Yes", 0: "No"})
-        show = pd.DataFrame({
-            "Risk band": view["risk"].apply(lambda r: band(r)[0]),
-            "Dropout risk (%)": view["risk"],
-            "Reasons (simple flags)": view.apply(reasons, axis=1),
-            "Debtor": yes_no(view["Debtor"]),
-            "Fees up to date": yes_no(view["Tuition fees up to date"]),
-            "Scholarship": yes_no(view["Scholarship holder"]),
-            "Age": view["Age at enrollment"],
-            "Units approved": view["Curricular units 1st sem (approved)"],
-            "Grade": view["Curricular units 1st sem (grade)"].round(1)})
-        st.dataframe(show, width="stretch", height=430, column_config={
-            "Dropout risk (%)": st.column_config.ProgressColumn("Dropout risk (%)", min_value=0, max_value=100, format="%.0f")})
-    with right:
         hist = df[["risk"]].copy()
         hist["Status"] = np.where(hist["risk"] >= threshold, "Flagged", "Not flagged")
         bars = alt.Chart(hist).mark_bar().encode(
@@ -287,10 +301,75 @@ def page_risk_list():
             y=alt.Y("count()", title="Students"),
             color=alt.Color("Status:N", scale=alt.Scale(domain=["Not flagged", "Flagged"], range=[LIGHT, RED]),
                             legend=alt.Legend(orient="top", title=None)))
-        st.altair_chart(style_chart(bars, 380), width="stretch")
+        st.markdown("**Risk distribution**")
+        st.altair_chart(style_chart(bars, 230), width="stretch")
+    with right:
+        order = ["Low", "Moderate", "Elevated", "High", "Critical"]
+        colours = {"Low": "#2E8B57", "Moderate": "#C9A227", "Elevated": "#D9822B", "High": RED, "Critical": "#7B1E1E"}
+        counts = df["risk"].apply(lambda r: band(r)[0]).value_counts().reindex(order).fillna(0).reset_index()
+        counts.columns = ["Band", "Students"]
+        bb = alt.Chart(counts).mark_bar(cornerRadiusEnd=4, size=20).encode(
+            x=alt.X("Students:Q"), y=alt.Y("Band:N", sort=order, title=None),
+            color=alt.Color("Band:N", legend=None, scale=alt.Scale(domain=order, range=[colours[o] for o in order])),
+            tooltip=["Band", "Students"])
+        st.markdown("**Students by risk band**")
+        st.altair_chart(style_chart(bb, 230), width="stretch")
+
+    view = flagged.sort_values("risk", ascending=False).head(int(top_n)).copy()
+    if view.empty:
+        st.info("No students are flagged at this threshold. Lower the slider.")
+        return
+    yes_no = lambda s: s.map({1: "Yes", 0: "No"})
+    show = pd.DataFrame({
+        "Student ID": view.index,
+        "Risk band": view["risk"].apply(lambda r: band(r)[0]).values,
+        "Dropout risk (%)": view["risk"].values,
+        "Reasons (simple flags)": view.apply(reasons, axis=1).values,
+        "Debtor": yes_no(view["Debtor"]).values,
+        "Fees up to date": yes_no(view["Tuition fees up to date"]).values,
+        "Age": view["Age at enrollment"].values,
+        "Units approved": view["Curricular units 1st sem (approved)"].values,
+        "Grade": view["Curricular units 1st sem (grade)"].round(1).values})
+    st.markdown("**Flagged students**")
+    st.dataframe(show, width="stretch", height=340, hide_index=True, column_config={
+        "Dropout risk (%)": st.column_config.ProgressColumn("Dropout risk (%)", min_value=0, max_value=100, format="%.0f"),
+        "Reasons (simple flags)": st.column_config.TextColumn(width="large")})
+
+    # ---- student record
+    st.markdown('<div class="ptitle" style="font-size:18px;margin-top:18px">Student record</div>', unsafe_allow_html=True)
+    sid = st.selectbox("Open a student record", list(view.index),
+                       format_func=lambda i: f"Student {i}   |   predicted risk {df.loc[i, 'risk']:.0f}%")
+    rec = df.loc[sid]
+    label, colour = band(rec["risk"])
+    typical = pd.concat([df[CODE_COLS + BINARY_COLS].mode().iloc[0], df[ADMISSION_NUM + SEM1_NUM].median()])
+    g1, g2, g3 = st.columns([1.15, 1.35, 1.3], gap="medium")
+    with g1:
+        with st.container(border=True):
+            st.markdown(gauge(rec["risk"], colour, f"{label} risk", f"Student {sid}<br>Known outcome in the dataset: {rec['actual']}"),
+                        unsafe_allow_html=True)
+    with g2:
+        with st.container(border=True):
+            st.markdown("**Compared with the typical student**")
+            rows = [("Age at enrollment", rec["Age at enrollment"], typical["Age at enrollment"]),
+                    ("Units approved (1st sem)", rec["Curricular units 1st sem (approved)"], typical["Curricular units 1st sem (approved)"]),
+                    ("Grade (1st sem)", round(rec["Curricular units 1st sem (grade)"], 1), round(typical["Curricular units 1st sem (grade)"], 1)),
+                    ("Admission grade", round(rec["Admission grade"], 1), round(typical["Admission grade"], 1))]
+            t = pd.DataFrame(rows, columns=["Measure", "This student", "Typical"])
+            for c in ["Debtor", "Tuition fees up to date", "Scholarship holder"]:
+                t.loc[len(t)] = [c.replace("Tuition fees up to date", "Fees up to date"),
+                                 "Yes" if rec[c] == 1 else "No", "Yes" if typical[c] == 1 else "No"]
+            st.dataframe(t.astype(str), hide_index=True, width="stretch", height=250)
+    with g3:
+        with st.container(border=True):
+            st.markdown("**Why flagged**")
+            st.markdown(bullet_list([x.capitalize() for x in reasons(rec).split(", ")] if reasons(rec) != "-"
+                                    else ["No single simple flag; the model combines several factors"]), unsafe_allow_html=True)
+            st.markdown("**Suggested support**")
+            st.markdown(bullet_list(support_actions(rec)), unsafe_allow_html=True)
     st.markdown('<div class="note">Model: Random Forest on admission and first-semester features, scored out-of-fold '
-                '(each student is scored by a model that never saw that student). Reasons are simple rule-based flags. '
-                'Decision support for advisors, never an automatic decision.</div>', unsafe_allow_html=True)
+                '(each student is scored by a model that never saw that student). Reasons and suggested support are '
+                'rule-based starting points for the advisor. Decision support, never an automatic decision.</div>',
+                unsafe_allow_html=True)
 
 
 def page_what_if():
@@ -327,8 +406,7 @@ def page_what_if():
     with right:
         with st.container(border=True):
             st.markdown("**Predicted outcome**")
-            st.markdown(f'<div style="font-size:54px;font-weight:700;color:{colour};line-height:1.1">{risk:.0f}%</div>'
-                        f'<span class="band" style="background:{colour}">{label} dropout risk</span>', unsafe_allow_html=True)
+            st.markdown(gauge(risk, colour, f"{label} dropout risk", "Chance of Dropout for this student profile"), unsafe_allow_html=True)
             data = pd.DataFrame({"Outcome": ["Dropout", "Enrolled", "Graduate"],
                                  "Probability (%)": [p["Dropout"] * 100, p["Enrolled"] * 100, p["Graduate"] * 100]})
             ch = alt.Chart(data).mark_bar(cornerRadiusEnd=4, size=26).encode(
@@ -455,13 +533,13 @@ def page_results():
 
 
 # ================================================================ layout
-st.sidebar.markdown('<div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#6B7280;font-weight:600">'
-                    'Navigation</div>', unsafe_allow_html=True)
 PAGES = {"At-risk students": page_risk_list, "What-if analysis": page_what_if, "Cohort profiles": page_profiles,
          "Dropout rules": page_rules, "Model results": page_results}
-choice = st.sidebar.radio("Page", list(PAGES), label_visibility="collapsed")
-st.sidebar.divider()
-st.sidebar.markdown('<div style="font-size:12px;color:#6B7280;line-height:1.6"><b style="color:#0B2545">Group 03</b><br>'
+NAV = list(PAGES)
+choice = st.segmented_control("Navigate", NAV, default=NAV[0], key="nav", label_visibility="collapsed") or NAV[0]
+st.sidebar.markdown('<div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#6B7280;font-weight:600">'
+                    'About</div>', unsafe_allow_html=True)
+st.sidebar.markdown('<div style="font-size:13px;color:#4B5563;line-height:1.65;margin-top:6px"><b style="color:#0B2545">Group 03</b><br>'
                     'Areeba Zahra \u00b7 Qudsia Batool \u00b7 Madeeha Noor<br><br>'
                     'Data: UCI Predict Students\' Dropout and Academic Success (CC BY 4.0).<br><br>'
                     'Decision support for advisors, never an automatic decision.</div>', unsafe_allow_html=True)
