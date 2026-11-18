@@ -17,7 +17,10 @@ from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import StratifiedKFold, cross_val_predict
 from sklearn.pipeline import Pipeline
+from sklearn.naive_bayes import GaussianNB
 from sklearn.preprocessing import OneHotEncoder, RobustScaler, StandardScaler
+from sklearn.svm import SVC
+from sklearn.tree import DecisionTreeClassifier
 
 st.set_page_config(page_title="Student Success Early-Warning", page_icon="🎓", layout="wide", initial_sidebar_state="expanded")
 SEED = 42
@@ -53,13 +56,38 @@ def load_df():
     return df
 
 
-def make_pipeline():
-    pre = ColumnTransformer([
+def make_pre():
+    return ColumnTransformer([
         ("codes", OneHotEncoder(handle_unknown="ignore"), CODE_COLS),
         ("numbers", RobustScaler(), ADMISSION_NUM + SEM1_NUM),
         ("binary", "passthrough", BINARY_COLS)], sparse_threshold=0)
+
+
+def make_pipeline():
     rf = RandomForestClassifier(n_estimators=200, class_weight="balanced", random_state=SEED, n_jobs=-1)
-    return Pipeline([("preprocessing", pre), ("classifier", rf)])
+    return Pipeline([("preprocessing", make_pre()), ("classifier", rf)])
+
+
+@st.cache_data(show_spinner="Computing learning curves (about a minute, first time only)...")
+def learning_curves():
+    """Train and validation macro-F1 as the number of training students grows (models and preprocessing as in notebook 06)."""
+    from sklearn.model_selection import learning_curve, train_test_split
+    df = load_df()
+    X_tr, _, y_tr, _ = train_test_split(df[FEATURES_B], df["Target"], test_size=0.2, stratify=df["Target"], random_state=SEED)
+    models = {
+        "Decision Tree": DecisionTreeClassifier(random_state=SEED, class_weight="balanced"),
+        "Naive Bayes": GaussianNB(),
+        "Random Forest": RandomForestClassifier(n_estimators=100, random_state=SEED, class_weight="balanced", n_jobs=1),
+        "SVM": SVC(kernel="rbf", class_weight="balanced", random_state=SEED)}
+    cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=SEED)
+    rows = []
+    for name, model in models.items():
+        pipe = Pipeline([("preprocessing", make_pre()), ("classifier", model)])
+        sizes, tr, va = learning_curve(pipe, X_tr, y_tr, cv=cv, scoring="f1_macro", n_jobs=-1,
+                                       train_sizes=[0.2, 0.4, 0.6, 0.8, 1.0], shuffle=True, random_state=SEED)
+        for n, a, b in zip(sizes, tr.mean(axis=1), va.mean(axis=1)):
+            rows.append({"Model": name, "Training students": int(n), "Train": a, "Validation": b})
+    return pd.DataFrame(rows)
 
 
 @st.cache_data(show_spinner="Scoring students (first run only, about a minute)...")
@@ -526,6 +554,43 @@ def page_results():
     st.caption("Dashed red line: majority-class baseline (0.222).")
 
     st.dataframe(res, width="stretch", hide_index=True)
+    st.markdown('<div class="ptitle" style="font-size:18px;margin-top:22px">Learning curves</div>'
+                '<div class="psub">How each model\'s score changes as it sees more training students. '
+                'This is the classical-model version of a loss curve: the gap between the train and validation lines shows overfitting.</div>',
+                unsafe_allow_html=True)
+    if st.button("Compute learning curves (about a minute)") or st.session_state.get("lc_on"):
+        st.session_state["lc_on"] = True
+        lc = learning_curves()
+        order = ["Decision Tree", "Naive Bayes", "Random Forest", "SVM"]
+        palette = [BLUE, GREY, TEAL, NAVY]
+
+        st.markdown("**Validation score by model**")
+        a = alt.Chart(lc).mark_line(point=True, strokeWidth=2.5).encode(
+            x=alt.X("Training students:Q", title="Number of training students"),
+            y=alt.Y("Validation:Q", title="Validation macro-F1", scale=alt.Scale(domain=[0, 0.8])),
+            color=alt.Color("Model:N", sort=order, scale=alt.Scale(domain=order, range=palette),
+                            legend=alt.Legend(orient="top", title=None)),
+            tooltip=["Model", "Training students", alt.Tooltip("Validation:Q", format=".3f")])
+        base = alt.Chart(pd.DataFrame({"y": [0.222]})).mark_rule(color=RED, strokeDash=[5, 4]).encode(y="y:Q")
+        st.altair_chart(style_chart(a + base, 320), width="stretch")
+
+        st.markdown("**Train versus validation, per model**")
+        long = lc.melt(["Model", "Training students"], value_vars=["Train", "Validation"], var_name="Score", value_name="Macro-F1")
+        f = alt.Chart(long).mark_line(point=True, strokeWidth=2.5).encode(
+            x=alt.X("Training students:Q", title="Training students"),
+            y=alt.Y("Macro-F1:Q", scale=alt.Scale(domain=[0, 1.05])),
+            color=alt.Color("Score:N", scale=alt.Scale(domain=["Train", "Validation"], range=[RED, NAVY]),
+                            legend=alt.Legend(orient="top", title=None))
+        ).properties(width=180, height=230).facet(column=alt.Column("Model:N", sort=order, title=None))
+        f = f.configure_axis(labelColor="#4B5563", titleColor="#4B5563", gridColor="#EEF1F6", domainColor="#CBD2DC") \
+             .configure_view(strokeWidth=0).configure_legend(labelColor="#4B5563")
+        st.altair_chart(f, width="content")
+        st.markdown('<div class="note"><b>How to read it:</b> a train line far above the validation line means the model memorises '
+                    'the training students and generalises less well (overfitting). Lines that flatten mean more data would add little. '
+                    'A low validation line close to the train line means the model is too simple or its assumptions do not fit the data. '
+                    'Computed on the 80% training split with 3-fold cross-validation; the Random Forest uses 100 trees here to keep it fast.</div>',
+                    unsafe_allow_html=True)
+    st.write("")
     st.markdown('<div class="note">First-semester results lift every useful model by about 0.06 to 0.10 macro-F1. '
                 'Naive Bayes stays near the baseline. The Enrolled class is the hardest to separate. '
                 'The dashboard uses a Random Forest because it gives probabilities directly and has the higher Dropout recall.</div>',
