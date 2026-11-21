@@ -4,4 +4,4 @@
 |---|---|---|---|
 | 18/OCT/2026 | Qudsia Batool | Completed data-quality report (outliers, logic checks, decoding, decisions table) and EDA (outcome balance, dropout rate by group and course, grades by outcome, correlations, chi-square tests | notebooks/02_data_quality_eda.ipynb |
 | 24/OCT/2026 | Qudsia Batool | Built preprocessing (one-hot encoding, robust scaling, stratified 80/20 split) and PCA analysis| notebooks/03_transformations.ipnyb|
-| 15/NOV/2026 | Qudsia Batool | Clustering: feature preparation, PCA, K-means with elbow and silhouette, first student profiles | notebooks/05_clustering.ipynb |
+| 21/NOV/2026 | Qudsia Batool | Clustering evaluation: hierarchical comparison, seed stability, cluster profile table | notebooks/05_clustering.ipynb, results/cluster_profiles.csv |
