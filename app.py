@@ -3,10 +3,12 @@
 Pages
 1. At-risk students   ranked list from the Random Forest (Areeba's feature set B and preprocessing, notebook 06)
 2. What-if            change one student's details and see the predicted risk
-3. Cohort profiles    K-means student groups (Qudsia's clustering, notebook 05)
+3. Cohort profiles    K-means student groups, Ward comparison and seed stability (Qudsia's clustering, notebook 05)
 4. Dropout rules      association rules IF ... THEN Dropout (Madeeha's notebook 04)
 5. Model results      comparison table from notebook 06
 """
+from pathlib import Path
+
 import altair as alt
 import numpy as np
 import pandas as pd
@@ -47,11 +49,18 @@ CL_BIN = ["Debtor", "Tuition fees up to date", "Scholarship holder", "Gender", "
 
 
 # ================================================================ data and models
+DATA_CSV = Path(__file__).parent / "data" / "students.csv"
+
+
 @st.cache_data(show_spinner="Loading dataset...")
 def load_df():
-    from ucimlrepo import fetch_ucirepo
-    ds = fetch_ucirepo(id=697)
-    df = pd.concat([ds.data.features, ds.data.targets], axis=1)
+    """Use the copy in data/students.csv when it exists (fast, works offline); otherwise download from UCI."""
+    if DATA_CSV.exists():
+        df = pd.read_csv(DATA_CSV)
+    else:
+        from ucimlrepo import fetch_ucirepo
+        ds = fetch_ucirepo(id=697)
+        df = pd.concat([ds.data.features, ds.data.targets], axis=1)
     df.columns = df.columns.str.strip()
     return df
 
@@ -114,11 +123,7 @@ def final_model():
 @st.cache_data(show_spinner="Building student profiles...")
 def cluster_profiles():
     df = load_df()
-    X = df[CL_NUM + CL_BIN]
-    Xs = StandardScaler().fit_transform(X)
-    cum = np.cumsum(PCA(random_state=SEED).fit(Xs).explained_variance_ratio_)
-    n_comp = int(np.argmax(cum >= 0.90) + 1)
-    Xp = PCA(n_components=n_comp, random_state=SEED).fit_transform(Xs)
+    Xp, n_comp = cluster_space()
     labels = KMeans(n_clusters=5, n_init=10, random_state=SEED).fit_predict(Xp)
 
     g = df.groupby(labels)
@@ -133,7 +138,14 @@ def cluster_profiles():
         "Fees up to date %": g["Tuition fees up to date"].mean() * 100,
         "Scholarship %": g["Scholarship holder"].mean() * 100,
     })
-    # profile names come from the cluster averages, so they do not depend on the cluster numbering
+    names = profile_names(stats)
+    stats.insert(0, "Profile", [names[c] for c in stats.index])
+    stats = stats.sort_values("Dropout %", ascending=False).reset_index(drop=True)
+    return stats, n_comp
+
+
+def profile_names(stats):
+    """Profile names come from the cluster averages, so they do not depend on the cluster numbering."""
     names, n = {}, stats["Students"].sum()
     small = list(stats.index[stats["Students"] < 0.03 * n])
     rest = stats.drop(index=small)
@@ -148,9 +160,63 @@ def cluster_profiles():
         rest = rest.drop(index=young)
     for c in rest.index: names[c] = "Working-age students, mostly on track"
     for c in small: names[c] = "Very small group (not interpreted)"
-    stats.insert(0, "Profile", [names[c] for c in stats.index])
-    stats = stats.sort_values("Dropout %", ascending=False).reset_index(drop=True)
-    return stats, n_comp
+    return names
+
+
+def cluster_space():
+    """Same preparation as notebook 05: 18 columns, standardised, PCA keeping 90% of the variance."""
+    df = load_df()
+    Xs = StandardScaler().fit_transform(df[CL_NUM + CL_BIN])
+    cum = np.cumsum(PCA(random_state=SEED).fit(Xs).explained_variance_ratio_)
+    n_comp = int(np.argmax(cum >= 0.90) + 1)
+    return PCA(n_components=n_comp, random_state=SEED).fit_transform(Xs), n_comp
+
+
+@st.cache_data(show_spinner="Comparing K-means with Ward clustering and checking stability (about a minute, first time only)...")
+def cluster_evaluation():
+    """Notebook 05, steps 4 and 5: hierarchical comparison and ten-seed stability."""
+    from sklearn.cluster import AgglomerativeClustering
+    from sklearn.metrics import adjusted_rand_score, silhouette_score
+    df = load_df()
+    Xp, _ = cluster_space()
+    appr_col = "Curricular units 1st sem (approved)"
+    appr = df[appr_col]
+    drop = (df["Target"] == "Dropout").values
+
+    km5 = KMeans(n_clusters=5, n_init=10, random_state=SEED).fit(Xp)
+    ref = km5.labels_
+
+    # silhouette by k, both methods
+    rows = []
+    for k in range(2, 11):
+        km = KMeans(n_clusters=k, n_init=10, random_state=SEED).fit_predict(Xp)
+        hc = AgglomerativeClustering(n_clusters=k, linkage="ward").fit_predict(Xp)
+        rows.append({"k": k, "K-means": silhouette_score(Xp, km), "Ward": silhouette_score(Xp, hc)})
+    sil = pd.DataFrame(rows)
+
+    # K-means (k = 5) against Ward (k = 5)
+    hc5 = AgglomerativeClustering(n_clusters=5, linkage="ward").fit_predict(Xp)
+    ari_hc = adjusted_rand_score(ref, hc5)
+    g = df.groupby(ref)
+    small = pd.DataFrame({"Students": g.size(), "Approved units (1st sem)": g[appr_col].mean(),
+                          "Average age": g["Age at enrollment"].mean()})
+    names = profile_names(small)
+    row_labels = {c: f"{names[c]} (n={int(small.loc[c, 'Students']):,})" for c in small.index}
+    cross = pd.crosstab(pd.Series(ref).map(row_labels).rename("K-means profile"),
+                        pd.Series(hc5 + 1).rename("Ward cluster"))
+    cross = cross.loc[[row_labels[c] for c in small.sort_values("Approved units (1st sem)").index]]
+    cross.columns = [f"Ward {c}" for c in cross.columns]
+
+    # ten seeds against the reference run
+    stab, high = [], []
+    for sd in range(10):
+        lab = KMeans(n_clusters=5, n_init=10, random_state=sd).fit_predict(Xp)
+        stab.append({"Seed": sd, "ARI vs seed 42": adjusted_rand_score(ref, lab), "Silhouette": silhouette_score(Xp, lab)})
+        low = appr.groupby(lab).mean().idxmin()
+        m = lab == low
+        high.append({"Seed": sd, "Students": int(m.sum()), "Avg approved units": appr[m].mean(),
+                     "Dropout %": drop[m].mean() * 100})
+    return {"sil": sil, "ari_hc": ari_hc, "cross": cross, "stab": pd.DataFrame(stab), "high": pd.DataFrame(high)}
 
 
 def build_items(df):
@@ -484,6 +550,62 @@ def page_profiles():
     st.markdown(f'<div class="note">Features: 18 columns, standardised, reduced with PCA to {n_comp} components. The silhouette '
                 'score is low (about 0.16), so the groups overlap: these are descriptive profiles, not sharply separated groups. '
                 'Profile names are derived from each group\'s averages. Associations, not causes.</div>', unsafe_allow_html=True)
+
+    # ---- evaluation (notebook 05, steps 4 and 5)
+    st.markdown('<div class="ptitle" style="font-size:18px;margin-top:22px">How reliable are these groups?</div>'
+                '<div class="psub">Two checks from notebook 05: do a different method and different random starts find the same groups?</div>',
+                unsafe_allow_html=True)
+    ev = cluster_evaluation()
+    sil, stab, high, cross = ev["sil"], ev["stab"], ev["high"], ev["cross"]
+    t1, t2 = st.tabs(["K-means vs Ward hierarchical", "Stability across 10 seeds"])
+
+    with t1:
+        s5 = sil[sil["k"] == 5].iloc[0]
+        kpi_row([
+            ("Silhouette at k = 5", f"{s5['Ward']:.3f}", f"Ward (K-means: {s5['K-means']:.3f})", BLUE),
+            ("Agreement (ARI)", f"{ev['ari_hc']:.2f}", "K-means vs Ward, k = 5. 1 = identical", RED),
+            ("Best silhouette", f"k = {int(sil.loc[sil['Ward'].idxmax(), 'k'])}", "Ward; K-means peaks at "
+             f"k = {int(sil.loc[sil['K-means'].idxmax(), 'k'])}", NAVY)])
+        long_s = sil.melt("k", var_name="Method", value_name="Silhouette")
+        ch = alt.Chart(long_s).mark_line(point=True, strokeWidth=2.5).encode(
+            x=alt.X("k:O", title="Number of clusters (k)", axis=alt.Axis(labelAngle=0)),
+            y=alt.Y("Silhouette:Q", scale=alt.Scale(domain=[0, 0.4])),
+            color=alt.Color("Method:N", scale=alt.Scale(domain=["K-means", "Ward"], range=[NAVY, TEAL]),
+                            legend=alt.Legend(orient="top", title=None)),
+            tooltip=["Method", "k", alt.Tooltip("Silhouette:Q", format=".3f")])
+        st.altair_chart(style_chart(ch, 260), width="stretch")
+        st.markdown("**Where do the K-means profiles go in the Ward clustering?** (number of students)")
+        st.dataframe(cross, width="stretch")
+        st.markdown('<div class="note">Both methods find the distinctive small groups: the 51 students with special educational '
+                    'needs stay together, and most heavy-load students stay together. The large middle groups are split '
+                    'differently, which fits the weak overall structure. Ward has the higher silhouette at k = 5, but the groups '
+                    'still overlap.</div>', unsafe_allow_html=True)
+
+    with t2:
+        close = int((stab["ARI vs seed 42"] >= 0.8).sum())
+        kpi_row([
+            ("Seeds matching seed 42", f"{close} of {len(stab)}", "ARI of 0.8 or higher", TEAL),
+            ("Mean ARI", f"{stab['ARI vs seed 42'].mean():.2f}", f"lowest {stab['ARI vs seed 42'].min():.2f}", BLUE),
+            ("High-risk group size", f"{int(high['Students'].min())} to {int(high['Students'].max())}",
+             f"dropout {high['Dropout %'].min():.0f}% to {high['Dropout %'].max():.0f}% in every seed", RED)])
+        bar = alt.Chart(stab).mark_bar(cornerRadiusEnd=4, size=22).encode(
+            x=alt.X("Seed:O", axis=alt.Axis(labelAngle=0)),
+            y=alt.Y("ARI vs seed 42:Q", scale=alt.Scale(domain=[0, 1])),
+            color=alt.condition(alt.datum["ARI vs seed 42"] >= 0.8, alt.value(TEAL), alt.value(GREY)),
+            tooltip=["Seed", alt.Tooltip("ARI vs seed 42:Q", format=".3f"), alt.Tooltip("Silhouette:Q", format=".3f")])
+        st.altair_chart(style_chart(bar, 240), width="stretch")
+        st.caption("Agreement of each rerun with the seed-42 clusters. Teal: almost the same clusters (ARI 0.8 or higher).")
+        a, b = st.columns(2)
+        with a:
+            st.markdown("**All seeds**")
+            st.dataframe(stab.round(3), width="stretch", hide_index=True)
+        with b:
+            st.markdown("**The high-risk group in every seed** (cluster with the fewest approved units)")
+            st.dataframe(high.round(2), width="stretch", hide_index=True)
+        st.markdown('<div class="note">The boundaries of the large groups can shift from seed to seed, so profiles are tendencies, '
+                    'not fixed segments. The group of students who pass almost nothing in the first semester is found in every '
+                    'seed with about the same size and the same very high dropout rate.</div>', unsafe_allow_html=True)
+
 
 
 def page_rules():
