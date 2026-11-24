@@ -7,3 +7,6 @@ scipy
 ucimlrepo
 streamlit
 mlxtend
+streamlit>=1.50
+altair
+
