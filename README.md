@@ -4,6 +4,8 @@ DS-311 Data Mining semester project (Fall 2026), NUST. Group G03.
 
 We build an early-warning system that predicts which university students are at risk of dropping out, using enrollment and first-year academic data, and we look for the patterns that show up before dropout.
 
+**Live app:** https://student-success-early-warning-9weiqkrwf3mr67rsvnpzus.streamlit.app/
+
 ## Team
 - Areeba Zahra 
 - Madeeha Noor
